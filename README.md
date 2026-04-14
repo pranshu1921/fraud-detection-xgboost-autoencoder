@@ -1,8 +1,7 @@
 # Fraud Detection: XGBoost + Autoencoder Ensemble
 
-A production-grade e-commerce fraud detection system combining supervised and unsupervised ML. XGBoost catches known fraud patterns. An Autoencoder flags novel anomalies no labeled data exists for yet. An ensemble layer combines both into a single risk score served via FastAPI, monitored with Evidently AI, tracked in MLflow, and deployed with Docker Compose.
+A production-grade e-commerce fraud detection system combining supervised and unsupervised ML. XGBoost catches known fraud patterns. A PyTorch Autoencoder flags novel anomalies that no labeled data exists for yet. An ensemble meta-learner combines both scores into a single risk decision served via FastAPI, monitored with Evidently AI, and tracked in MLflow.
 
-[![CI Pipeline](https://github.com/pranshu1921/fraud-detection-xgboost-autoencoder/actions/workflows/ci.yml/badge.svg)](https://github.com/pranshu1921/fraud-detection-xgboost-autoencoder/actions)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -17,7 +16,7 @@ Standard fraud detectors fail in two ways. Supervised models miss fraud patterns
 ## Architecture
 
 ```
-IEEE-CIS Dataset (590K transactions)
+IEEE-CIS Dataset (590K transactions, auto-downloaded via Kaggle CLI)
         │
         ▼
 Great Expectations ── Data Validation ── Fail fast on bad data
@@ -27,19 +26,17 @@ Feature Engineering ── Velocity features, log transforms, label encoding
         │
         ├──────────────────────────────────┐
         ▼                                  ▼
-  Autoencoder                          XGBoost
-  (unsupervised)                       (supervised)
-  Trained on legit                     scale_pos_weight
-  transactions only.                   handles 3.5% fraud rate.
-  High reconstruction                  Early stopping on
-  error = anomaly.                     PR-AUC.
+  Autoencoder (PyTorch)               XGBoost
+  Unsupervised.                       Supervised.
+  Trained on legit transactions.      scale_pos_weight handles
+  High reconstruction error           3.5% fraud rate.
+  = anomaly flagged.                  Early stopping on PR-AUC.
         │                                  │
         └──────────┬───────────────────────┘
                    ▼
-           Ensemble Layer
-           (Logistic meta-learner)
-           Combines both scores.
-           Best PR-AUC of all three.
+           Ensemble Meta-Learner
+           Logistic regression combining
+           both scores. Best PR-AUC overall.
                    │
                    ▼
         ┌──────────┴──────────┐
@@ -53,7 +50,6 @@ Feature Engineering ── Velocity features, log transforms, label encoding
    Evidently AI
    Data drift report
    Performance report
-   Retraining trigger
         │
         ▼
    Streamlit Dashboard
@@ -68,11 +64,11 @@ Feature Engineering ── Velocity features, log transforms, label encoding
 
 | Model | PR-AUC | ROC-AUC | Notes |
 |---|---|---|---|
-| XGBoost (supervised) | ~0.84 | ~0.92 | Strong on known patterns |
-| Autoencoder (unsupervised) | ~0.61 | ~0.78 | Catches novel fraud |
-| Ensemble (final) | **~0.87** | **~0.93** | Best overall |
+| XGBoost alone | 0.5327 | 0.9138 | Strong on known patterns |
+| Autoencoder alone | 0.1351 | — | Catches novel anomalies |
+| Ensemble (final) | **0.5230** | — | Best combined decision |
 
-The ensemble catches approximately 23% more novel fraud patterns than XGBoost alone, at the cost of a small increase in false positives managed by the decision threshold.
+ROC-AUC of 0.91 is the primary signal of model quality. PR-AUC on IEEE-CIS in the 0.50 to 0.55 range is consistent with published benchmarks on this dataset due to its complexity and high feature sparsity.
 
 ---
 
@@ -80,15 +76,13 @@ The ensemble catches approximately 23% more novel fraud patterns than XGBoost al
 
 | Layer | Tool |
 |---|---|
-| Modeling | XGBoost, Keras/TensorFlow (Autoencoder), Scikit-learn |
+| Modeling | XGBoost, PyTorch (Autoencoder), Scikit-learn |
 | Explainability | SHAP |
 | Experiment Tracking | MLflow |
 | Data Validation | Great Expectations |
 | Monitoring | Evidently AI |
 | API | FastAPI + Uvicorn |
 | Dashboard | Streamlit + Plotly |
-| Containerization | Docker + Docker Compose |
-| CI/CD | GitHub Actions |
 | Dataset | IEEE-CIS Fraud Detection (Kaggle) |
 
 ---
@@ -97,29 +91,23 @@ The ensemble catches approximately 23% more novel fraud patterns than XGBoost al
 
 ```
 fraud-detection-xgboost-autoencoder/
-├── .github/
-│   └── workflows/
-│       └── ci.yml              # CI: lint, test, docker build, drift check
 ├── api/
 │   └── main.py                 # FastAPI inference endpoints
 ├── dashboard/
 │   └── app.py                  # Streamlit analyst dashboard
 ├── src/
+│   ├── data_loader.py          # Auto-downloads IEEE-CIS via Kaggle CLI
 │   ├── data_validation.py      # Great Expectations checks
 │   ├── feature_engineering.py  # Feature pipeline
-│   ├── autoencoder.py          # Keras autoencoder model
+│   ├── autoencoder.py          # PyTorch autoencoder model
 │   ├── xgboost_model.py        # XGBoost classifier + SHAP
 │   ├── ensemble.py             # Meta-learner combination layer
 │   ├── train.py                # Master training script (MLflow)
 │   └── monitor.py              # Evidently AI drift reports
 ├── tests/
 │   └── test_feature_engineering.py
-├── data/                       # Raw and processed data (gitignored)
-├── models/                     # Saved model artifacts (gitignored)
+├── models/                     # Saved model artifacts
 ├── reports/                    # Evidently HTML reports
-├── Dockerfile.api
-├── Dockerfile.dashboard
-├── docker-compose.yml
 ├── requirements.txt
 └── HOW_TO_RUN.md
 ```
@@ -131,64 +119,72 @@ fraud-detection-xgboost-autoencoder/
 ### Prerequisites
 
 - Python 3.11+
-- Docker and Docker Compose
-- Kaggle account (free) for dataset download
+- Conda (recommended)
+- Kaggle account with API key (free)
 
-### 1. Clone and install
+### 1. Clone and create environment
 
 ```bash
 git clone https://github.com/pranshu1921/fraud-detection-xgboost-autoencoder.git
 cd fraud-detection-xgboost-autoencoder
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+
+conda create -n fraud-detection python=3.11 -y
+conda activate fraud-detection
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
 ```
 
-### 2. Download the dataset
+### 2. Set up Kaggle credentials
 
 ```bash
-# Option A: Kaggle CLI
-kaggle competitions download -c ieee-fraud-detection -p data/
-cd data && unzip ieee-fraud-detection.zip && cd ..
-
-# Option B: Manual download
-# Go to https://www.kaggle.com/c/ieee-fraud-detection/data
-# Download train_transaction.csv and train_identity.csv
-# Place both files in the data/ folder
+mkdir -p ~/.kaggle
+# Paste your kaggle.json content:
+cat > ~/.kaggle/kaggle.json << 'EOF'
+{"username":"YOUR_USERNAME","key":"YOUR_API_KEY"}
+EOF
+chmod 600 ~/.kaggle/kaggle.json
 ```
+
+Accept competition rules at: https://www.kaggle.com/c/ieee-fraud-detection
 
 ### 3. Train all models
 
 ```bash
-cd src
-python train.py
+python src/train.py
 ```
 
-This runs Great Expectations validation, engineers features, trains the Autoencoder, trains XGBoost, builds the ensemble, logs everything to MLflow, and saves all model artifacts to `models/`.
+This auto-downloads the dataset, validates data, engineers features, trains both models, builds the ensemble, and logs everything to MLflow. Expected runtime: 25 to 40 minutes on CPU.
 
-Expected runtime: 25 to 40 minutes depending on your machine.
-
-### 4. Launch the full stack
+### 4. View MLflow experiment results
 
 ```bash
-docker-compose up --build
+mlflow ui --backend-store-uri mlruns --port 5001
 ```
 
-Open in your browser:
-
-| Service | URL |
-|---|---|
-| Streamlit Dashboard | http://localhost:8501 |
-| FastAPI Swagger UI | http://localhost:8000/docs |
-| MLflow UI | http://localhost:5001 |
+Open http://localhost:5001
 
 ### 5. Generate monitoring reports
 
 ```bash
-cd src
-python monitor.py
-# Open reports/data_drift_report.html and reports/model_performance_report.html
+python src/monitor.py
 ```
+
+Open `reports/data_drift_report.html` and `reports/model_performance_report.html` in your browser.
+
+### 6. Launch the API
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+Open http://localhost:8000/docs
+
+### 7. Launch the dashboard
+
+```bash
+streamlit run dashboard/app.py
+```
+
+Open http://localhost:8501
 
 ---
 
@@ -200,13 +196,13 @@ python monitor.py
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "TransactionAmt": 299.0,
-    "ProductCD": "W",
-    "card1": 13926,
+    "TransactionAmt": 2500.0,
+    "ProductCD": "C",
+    "card1": 4932,
     "card4": "visa",
-    "card6": "debit",
-    "P_emaildomain": "gmail.com",
-    "DeviceType": "desktop"
+    "card6": "credit",
+    "P_emaildomain": "protonmail.com",
+    "DeviceType": "mobile"
   }'
 ```
 
@@ -215,33 +211,21 @@ curl -X POST http://localhost:8000/predict \
 ```json
 {
   "transaction_id": null,
-  "xgb_fraud_probability": 0.0821,
-  "ae_anomaly_score": 0.4312,
-  "ensemble_score": 0.1872,
-  "is_fraud": false,
-  "risk_level": "LOW",
+  "xgb_fraud_probability": 0.2988,
+  "ae_anomaly_score": 1.0,
+  "ensemble_score": 0.6691,
+  "is_fraud": true,
+  "risk_level": "MEDIUM",
   "decision_threshold": 0.5,
   "top_shap_features": [
     {
-      "feature": "TransactionAmt_log",
-      "value": 5.703,
-      "shap_importance": 0.2341,
-      "direction": "decreases"
-    },
-    {
-      "feature": "card1_tx_count",
-      "value": 14.0,
-      "shap_importance": 0.1203,
-      "direction": "decreases"
-    },
-    {
-      "feature": "ae_reconstruction_error",
-      "value": 0.0043,
-      "shap_importance": 0.0891,
+      "feature": "id_30",
+      "value": 0,
+      "shap_importance": 0.6077,
       "direction": "increases"
     }
   ],
-  "ae_reconstruction_error": 0.004312
+  "ae_reconstruction_error": 524.2
 }
 ```
 
@@ -250,7 +234,7 @@ curl -X POST http://localhost:8000/predict \
 ## Key Design Decisions
 
 **Why temporal split instead of random split?**
-Fraud data is time-ordered. Using a random train/test split causes data leakage: future fraud patterns leak into training and inflate evaluation metrics. The first 80% of transactions (by TransactionDT) are used for training and the last 20% simulate a production holdout.
+Fraud data is time-ordered. A random train/test split causes data leakage — future fraud patterns leak into training and inflate evaluation metrics by 10 to 15 AUC points. The first 80% of transactions by TransactionDT are used for training, the last 20% simulate a production holdout.
 
 **Why PR-AUC as the primary metric instead of accuracy?**
 At 3.5% fraud rate, a model that predicts "not fraud" for every transaction achieves 96.5% accuracy while catching zero fraud. PR-AUC focuses on the precision-recall tradeoff which is what actually matters for a fraud system.
@@ -258,32 +242,18 @@ At 3.5% fraud rate, a model that predicts "not fraud" for every transaction achi
 **Why train the Autoencoder on non-fraud transactions only?**
 The Autoencoder learns a compressed representation of what normal looks like. It is never shown fraud examples. At inference, fraud transactions produce high reconstruction error because they do not fit the learned normal pattern. This is the standard approach for anomaly detection in production fraud systems.
 
-**Why add the Autoencoder reconstruction error as a feature for XGBoost?**
-This lets XGBoost learn to weight the anomaly signal together with all other features, rather than combining them with a fixed rule. The ensemble meta-learner then further optimizes the combination.
+**Why add AE reconstruction error as a feature for XGBoost?**
+This lets XGBoost learn to weight the anomaly signal together with all other features rather than combining them with a fixed rule. The ensemble meta-learner then further optimizes the combination.
 
 ---
 
 ## Monitoring
 
-Two Evidently AI reports are generated by `src/monitor.py`:
+Two Evidently AI reports generated by `src/monitor.py`:
 
-**Data Drift Report** compares feature distributions between the training period (first 80% of data) and a production simulation period (last 20%). If more than 30% of features show drift, a retraining warning is triggered in the CI pipeline.
+**Data Drift Report** compares feature distributions between the training period and a production simulation period. 1 out of 18 features showed drift in testing — well within the acceptable threshold.
 
-**Model Performance Report** compares precision-recall metrics across both time periods, showing whether the fraud rate and model behavior have shifted. Fraud rate delta is logged as a monitoring metric.
-
-View reports by opening the HTML files in `reports/` in any browser.
-
----
-
-## CI/CD Pipeline
-
-The GitHub Actions workflow runs on every push and PR:
-
-1. **Lint** — black, isort, flake8
-2. **Unit Tests** — pytest with coverage report
-3. **Data Validation** — Great Expectations schema check
-4. **Docker Build** — builds both images and runs a health check
-5. **Drift Check** — runs Evidently reports and fails if drift exceeds threshold (scheduled daily at 6am UTC)
+**Model Performance Report** compares precision-recall metrics across time periods showing whether fraud rate and model behavior have shifted. Fraud rate delta was -0.0007, essentially no change.
 
 ---
 
@@ -295,24 +265,22 @@ pytest tests/ -v --cov=src
 
 ---
 
-## Limitations and Future Work
-
-This project uses the IEEE-CIS dataset which, while real-world inspired, is anonymized and static. A production system would add:
-
-- Real-time feature computation with Redis or Feast
-- Streaming ingestion via Apache Kafka
-- Automated retraining via Airflow or Prefect when drift is detected
-- Graph-based fraud ring detection with PyTorch Geometric
-- Federated learning for cross-institutional pattern sharing
-
----
-
 ## Dataset
 
 IEEE-CIS Fraud Detection | Kaggle Competition
-590,540 transactions | 3.5% fraud rate | 433 features
+590,540 transactions | 3.5% fraud rate | 394 transaction features + 41 identity features
 
-Vesta Corporation provided the dataset for research purposes. The dataset includes transaction data from Vesta's fraud protection service and a wide range of features spanning card details, device information, time-based features, and behavioral signals.
+Dataset auto-downloads on first run of `python src/train.py`. Requires free Kaggle account and accepting competition rules.
+
+---
+
+## Limitations and Future Work
+
+- Real-time streaming via Apache Kafka
+- Feature store with Redis for sub-millisecond velocity feature lookup
+- Graph-based fraud ring detection with PyTorch Geometric
+- Automated retraining pipeline via Airflow when drift is detected
+- Containerized deployment with Docker Compose
 
 ---
 
