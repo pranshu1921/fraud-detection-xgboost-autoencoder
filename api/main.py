@@ -41,25 +41,38 @@ app = FastAPI(
 # Model Loading
 # -------------------------
 
-MODEL_DIR = os.environ.get("MODEL_DIR", "models")
+MODEL_DIR = os.environ.get(
+    "MODEL_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "models")
+)
 
 def load_models():
     """Load all model artifacts at startup."""
     try:
-        import xgboost as xgb
-        from tensorflow import keras
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+        from autoencoder import load_autoencoder_artifacts, FraudAutoencoder
+        from xgboost_model import load_xgboost_model
+        from ensemble import load_meta_learner
+        import json
 
         models = {}
-        models["xgb"] = joblib.load(f"{MODEL_DIR}/xgboost_model.pkl")
-        models["ae"]  = keras.models.load_model(f"{MODEL_DIR}/autoencoder.keras")
-        models["ae_scaler"]    = joblib.load(f"{MODEL_DIR}/ae_scaler.pkl")
-        models["ae_threshold"] = joblib.load(f"{MODEL_DIR}/ae_threshold.pkl")["threshold"]
-        models["encoders"]     = joblib.load(f"data/encoders.pkl")
+
+        models["xgb"] = load_xgboost_model(MODEL_DIR)
+        ae_model, ae_scaler, ae_threshold = load_autoencoder_artifacts(MODEL_DIR)
+        models["ae"]           = ae_model
+        models["ae_scaler"]    = ae_scaler
+        models["ae_threshold"] = ae_threshold
+        models["encoders"]     = joblib.load(
+            os.path.join(os.path.dirname(__file__), "..", "data", "encoders.pkl")
+        )
         models["meta"]         = load_meta_learner(MODEL_DIR)
 
         max_score_data = joblib.load(f"{MODEL_DIR}/ae_max_score.pkl")
         models["ae_max_score"] = max_score_data["ae_max_score"]
 
+        import shap
         models["shap_explainer"] = shap.TreeExplainer(models["xgb"])
 
         with open(f"{MODEL_DIR}/training_summary.json") as f:
@@ -70,6 +83,8 @@ def load_models():
 
     except Exception as e:
         print(f"Model loading failed: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 
@@ -124,37 +139,68 @@ class HealthResponse(BaseModel):
 # -------------------------
 
 def preprocess_single(transaction: dict, encoders: dict) -> pd.DataFrame:
-    """Convert a transaction dict to a feature DataFrame."""
+    """
+    Convert a transaction dict to a full feature DataFrame
+    matching the exact columns XGBoost was trained on.
+    """
+    import pandas as pd
+    import numpy as np
     from sklearn.preprocessing import LabelEncoder
 
-    df = pd.DataFrame([transaction])
+    # Load the feature column list from the saved parquet
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+    X_ref = pd.read_parquet(
+        os.path.join(data_dir, "X_features.parquet"),
+        columns=None
+    )
+    # Get column names without ae columns (those get added after)
+    base_cols = [
+        c for c in X_ref.columns
+        if c not in ["ae_reconstruction_error", "ae_anomaly_score"]
+    ]
 
-    # Apply same engineering as training
-    df["TransactionAmt_log"] = np.log1p(df["TransactionAmt"])
-    df["amt_deviation_from_card_mean"] = 0.0  # Unknown at single inference
-    df["card1_tx_count"]  = 1.0
-    df["email_tx_count"]  = 1.0
-    df["addr1_tx_count"]  = 1.0
-    df["tx_hour"] = 12.0  # Default to midday
-    df["tx_day"]  = 0.0
+    # Start with a zero row matching all base columns
+    row = {col: 0.0 for col in base_cols}
 
-    # Encode categoricals
-    cat_cols = ["ProductCD", "card4", "card6", "P_emaildomain", "DeviceType"]
+    # Fill in the values from the transaction input
+    for key, val in transaction.items():
+        if key in row and val is not None:
+            row[key] = val
+
+    df = pd.DataFrame([row])
+
+    # Encode categorical columns using saved encoders
+    cat_cols = [
+        "ProductCD", "card4", "card6",
+        "P_emaildomain", "R_emaildomain", "DeviceType", "DeviceInfo",
+        "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9",
+    ]
     for col in cat_cols:
         if col in df.columns and col in encoders:
             le = encoders[col]
-            val = str(df[col].values[0]) if df[col].values[0] is not None else "missing"
+            val = str(df[col].values[0])
             known = set(le.classes_)
-            val = val if val in known else "missing"
+            if val not in known:
+                val = le.classes_[0]  # fall back to first known class
             df[col] = le.transform([val])[0]
         elif col in df.columns:
             df[col] = 0
 
-    # Fill any remaining numeric nulls
+    # Apply same engineered features as training
+    df["TransactionAmt_log"] = np.log1p(df["TransactionAmt"])
+    df["amt_deviation_from_card_mean"] = 0.0
+    df["card1_tx_count"]  = 1.0
+    df["email_tx_count"]  = 1.0
+    df["addr1_tx_count"]  = 1.0
+    df["tx_hour"] = 12.0
+    df["tx_day"]  = 0.0
+    df["is_night"] = 0.0
+
+    # Fill any nulls
     for col in df.select_dtypes(include=[np.number]).columns:
         df[col] = df[col].fillna(0.0)
 
-    return df
+    return df[base_cols]
 
 
 # -------------------------
@@ -193,8 +239,11 @@ def predict(transaction: TransactionInput, transaction_id: Optional[str] = None)
         X_single = preprocess_single(tx_dict, MODELS["encoders"])
 
         # --- Autoencoder Score ---
-        X_scaled = MODELS["ae_scaler"].transform(X_single)
-        X_reconstructed = MODELS["ae"].predict(X_scaled, verbose=0)
+        import torch
+        X_scaled = MODELS["ae_scaler"].transform(X_single).astype(np.float32)
+        X_tensor = torch.tensor(X_scaled)
+        with torch.no_grad():
+            X_reconstructed = MODELS["ae"](X_tensor).numpy()
         ae_error = float(np.mean(np.power(X_scaled - X_reconstructed, 2)))
         ae_score = ae_error / (MODELS["ae_threshold"] + 1e-10)
 
