@@ -119,26 +119,43 @@ fraud-detection-xgboost-autoencoder/
 
 ## Screenshots
 
-### Training Complete
+### 1. Training Complete
 ![Training Complete](screenshots/01_training_complete.png)
 
-### MLflow Experiment Tracking
-| Experiment Runs | Run Parameters and Metrics |
-|---|---|
-| ![MLflow Experiment](screenshots/02_mlflow_experiment.png) | ![MLflow Metrics](screenshots/03_mlflow_metrics_2.png) |
+---
 
-### Streamlit Fraud Analyst Dashboard
-| Live Transaction Feed | Transaction Detail with SHAP |
-|---|---|
-| ![Dashboard Feed](screenshots/04_dashboard_feed_1.png) | ![Dashboard Detail](screenshots/05_dashboard_detail.png) |
+### 2. MLflow Experiment Runs
+![MLflow Experiment](screenshots/02_mlflow_experiment.png)
 
-### FastAPI Inference Endpoint
+---
+
+### 3. MLflow Run Parameters and Metrics
+![MLflow Metrics](screenshots/03_mlflow_metrics_2.png)
+
+---
+
+### 4. Streamlit Dashboard — Live Transaction Feed
+![Dashboard Feed](screenshots/04_dashboard_feed_1.png)
+
+---
+
+### 5. Streamlit Dashboard — Transaction Detail with SHAP
+![Dashboard Detail](screenshots/05_dashboard_detail.png)
+
+---
+
+### 6. FastAPI Inference Endpoint
 ![FastAPI Swagger](screenshots/06_api_swagger.jpeg)
 
-### Evidently AI Monitoring
-| Data Drift Report | Model Performance Report |
-|---|---|
-| ![Evidently Drift](screenshots/07_evidently_drift.jpeg) | ![Model Performance](screenshots/08_model_performance_report.jpeg) |
+---
+
+### 7. Evidently AI — Data Drift Report
+![Evidently Drift](screenshots/07_evidently_drift.jpeg)
+
+---
+
+### 8. Evidently AI — Model Performance Report
+![Model Performance](screenshots/08_model_performance_report.jpeg)
 
 ---
 
