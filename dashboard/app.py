@@ -25,7 +25,7 @@ import random
 # Config
 # -------------------------
 
-API_URL = "http://api:8000"   # Docker Compose service name
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 REFRESH_INTERVAL = 3          # seconds between new transactions in simulation
 
 st.set_page_config(
@@ -317,21 +317,21 @@ perf_col1, perf_col2, perf_col3 = st.columns(3)
 
 with perf_col1:
     st.markdown("**XGBoost Alone**")
-    st.markdown("PR-AUC: `~0.84`")
-    st.markdown("ROC-AUC: `~0.92`")
-    st.progress(0.84)
+    st.markdown("PR-AUC: `0.527`")
+    st.markdown("ROC-AUC: `0.911`")
+    st.progress(0.527)
 
 with perf_col2:
     st.markdown("**Autoencoder Alone**")
-    st.markdown("PR-AUC: `~0.61`")
+    st.markdown("PR-AUC: `0.133`")
     st.markdown("Catches novel fraud patterns")
-    st.progress(0.61)
+    st.progress(0.133)
 
 with perf_col3:
     st.markdown("**Ensemble (Final)**")
-    st.markdown("PR-AUC: `~0.87` ✅")
+    st.markdown("PR-AUC: `0.518` ✅")
     st.markdown("Best overall performance")
-    st.progress(0.87)
+    st.progress(0.518)
 
 # -------------------------
 # Footer
@@ -339,7 +339,7 @@ with perf_col3:
 
 st.divider()
 st.markdown(
-    "**Stack:** XGBoost · Keras Autoencoder · SHAP · FastAPI · MLflow · Evidently AI · Docker · GitHub Actions"
+    "**Stack:** XGBoost · PyTorch Autoencoder · SHAP · FastAPI · MLflow · Evidently AI · Great Expectations · Streamlit"
 )
 st.markdown(
     "**Dataset:** [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) "
