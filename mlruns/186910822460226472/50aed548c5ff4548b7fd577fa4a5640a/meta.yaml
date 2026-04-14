@@ -1,0 +1,15 @@
+artifact_uri: file:///P:/fraud-detection-xgboost-autoencoder/mlruns/186910822460226472/50aed548c5ff4548b7fd577fa4a5640a/artifacts
+end_time: 1776143204575
+entry_point_name: ''
+experiment_id: '186910822460226472'
+lifecycle_stage: active
+run_id: 50aed548c5ff4548b7fd577fa4a5640a
+run_name: full_pipeline
+run_uuid: 50aed548c5ff4548b7fd577fa4a5640a
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1776142896221
+status: 3
+tags: []
+user_id: prans

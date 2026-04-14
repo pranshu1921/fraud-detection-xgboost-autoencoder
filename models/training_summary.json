@@ -1,0 +1,7 @@
+{
+  "run_id": "50aed548c5ff4548b7fd577fa4a5640a",
+  "ae_threshold": 0.684394311904907,
+  "ae_max_score": 5.0,
+  "xgb_pr_auc": 0.5327012428856504,
+  "ensemble_pr_auc": 0.523031728914421
+}

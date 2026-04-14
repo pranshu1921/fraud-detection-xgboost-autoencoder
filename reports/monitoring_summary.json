@@ -1,0 +1,10 @@
+{
+  "report_path": "reports/model_performance_report.html",
+  "n_features_checked": 18,
+  "drift_detected": false,
+  "share_drifted": 0.05555555555555555,
+  "n_drifted": 1,
+  "reference_fraud_rate": 0.03513521522674162,
+  "current_fraud_rate": 0.034409184813899145,
+  "fraud_rate_delta": -0.000726030412842478
+}
