@@ -1,22 +1,21 @@
 # HOW TO RUN — Fraud Detection: XGBoost + Autoencoder Ensemble
 
-This file walks through every step from a fresh clone to a fully running system with screenshots.
+This file walks through every step from a fresh clone to a fully running system.
 Follow these steps in order. Every command is copy-paste ready.
 
 ---
 
 ## Prerequisites
 
-Before you start, make sure you have all of these installed:
-
 | Tool | Version | Check Command | Install Link |
 |---|---|---|---|
 | Python | 3.11+ | `python --version` | https://python.org |
-| pip | latest | `pip --version` | included with Python |
-| Docker Desktop | 4.0+ | `docker --version` | https://docker.com |
-| Docker Compose | 2.0+ | `docker compose version` | included with Docker Desktop |
+| Conda | any | `conda --version` | https://anaconda.com |
 | Git | 2.0+ | `git --version` | https://git-scm.com |
 | Kaggle account | free | — | https://kaggle.com |
+
+**Terminal note:** Use **Anaconda Prompt** or **Command Prompt** for all Python commands.
+Use **GitBash** for Git commands only. Do not run Python in GitBash on Windows — it causes segmentation faults with PyTorch and XGBoost.
 
 ---
 
@@ -29,24 +28,18 @@ cd fraud-detection-xgboost-autoencoder
 
 ---
 
-## Step 2 — Create a Python Virtual Environment
+## Step 2 — Create Conda Environment
 
 ```bash
-# Create the virtual environment
-python -m venv venv
-
-# Activate it
-# On Mac / Linux:
-source venv/bin/activate
-
-# On Windows (Command Prompt):
-venv\Scripts\activate.bat
-
-# On Windows (PowerShell):
-venv\Scripts\Activate.ps1
+conda create -n fraud-detection python=3.11 -y
+conda activate fraud-detection
 ```
 
-Your terminal prompt should now show `(venv)` at the start.
+Verify:
+```bash
+python --version
+# Expected: Python 3.11.x
+```
 
 ---
 
@@ -54,153 +47,103 @@ Your terminal prompt should now show `(venv)` at the start.
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install setuptools
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
 ```
 
-This installs approximately 40 packages including TensorFlow, XGBoost, FastAPI, Streamlit, MLflow, and Evidently. Expect 3 to 5 minutes.
+Verify:
 
-Verify installation:
+Create a file called `verify.py` with this content:
 
+```python
+import torch, xgboost, mlflow, evidently, fastapi, streamlit, sklearn, pandas, numpy, shap
+print("numpy:      ", numpy.__version__)
+print("pandas:     ", pandas.__version__)
+print("torch:      ", torch.__version__)
+print("xgboost:    ", xgboost.__version__)
+print("sklearn:    ", sklearn.__version__)
+print("mlflow:     ", mlflow.__version__)
+print("shap:       ", shap.__version__)
+print("fastapi:    ", fastapi.__version__)
+print("streamlit:  ", streamlit.__version__)
+print("All packages OK")
+```
+
+Run it:
 ```bash
-python -c "import xgboost, tensorflow, mlflow, evidently, fastapi, streamlit; print('All packages OK')"
+python verify.py
 ```
 
-Expected output: `All packages OK`
+Expected: `All packages OK`
 
 ---
 
-## Step 4 — Download the Dataset
+## Step 4 — Set Up Kaggle API
 
-### Option A: Kaggle CLI (recommended)
-
-**4a. Set up Kaggle API credentials**
+**4a. Get your Kaggle API key**
 
 1. Go to https://www.kaggle.com/settings/account
-2. Scroll to "API" section
-3. Click "Create New Token"
-4. This downloads a file called `kaggle.json`
-5. Move it to the right location:
+2. Scroll to the **API** section
+3. Click **Create New API Token** (not "Create New Token")
+4. A `kaggle.json` file downloads to your Downloads folder
+
+**4b. Place the file in the right location**
 
 ```bash
-# Mac / Linux
 mkdir -p ~/.kaggle
-mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json
+cp /c/Users/YOUR_USERNAME/Downloads/kaggle.json ~/.kaggle/kaggle.json
 chmod 600 ~/.kaggle/kaggle.json
-
-# Windows
-mkdir %USERPROFILE%\.kaggle
-copy %USERPROFILE%\Downloads\kaggle.json %USERPROFILE%\.kaggle\kaggle.json
 ```
 
-**4b. Accept the competition rules**
+Replace `YOUR_USERNAME` with your actual Windows username.
 
-Go to https://www.kaggle.com/c/ieee-fraud-detection and click "Join Competition" (just to accept the data terms, no submission required).
+**4c. Accept the competition data terms**
 
-**4c. Download and extract**
+Go to https://www.kaggle.com/c/ieee-fraud-detection and click **Join Competition**. Accept the rules. No submission needed.
+
+**4d. Verify authentication**
 
 ```bash
-mkdir -p data
-kaggle competitions download -c ieee-fraud-detection -p data/
-cd data
-unzip ieee-fraud-detection.zip
-cd ..
+kaggle competitions files ieee-fraud-detection
 ```
 
-### Option B: Manual download
-
-1. Go to https://www.kaggle.com/c/ieee-fraud-detection/data
-2. Download `train_transaction.csv` and `train_identity.csv`
-3. Place both files in the `data/` folder
-
-### Verify the data
-
-```bash
-ls -lh data/
-# You should see:
-# train_transaction.csv   (~470 MB)
-# train_identity.csv      (~26 MB)
-```
+Expected: a list of files including `train_transaction.csv` and `train_identity.csv`.
 
 ---
 
-## Step 5 — Run Data Validation
+## Step 5 — Run the Full Training Pipeline
+
+Run from the **project root** (not from inside src/):
 
 ```bash
-cd src
-python data_validation.py
-cd ..
+python src/train.py
 ```
 
-Expected output:
-```
-Loading data for validation...
-  Transactions shape: (590540, 394)
-  Identity shape:     (144233, 41)
+This automatically:
+1. Downloads the IEEE-CIS dataset from Kaggle (~677MB, one time only)
+2. Validates the data with Great Expectations
+3. Engineers 439 features from 590K transactions
+4. Trains the PyTorch Autoencoder on 570K legitimate transactions
+5. Trains XGBoost with temporal split and SHAP explainability
+6. Trains the ensemble meta-learner
+7. Logs everything to MLflow
+8. Saves all model artifacts to `models/`
 
-Running transaction validation...
-Running identity validation...
-
---- Validation Summary ---
-Transactions: 5/5 checks passed
-Identity:     3/3 checks passed
-
-Overall validation: PASSED
-```
-
-If validation fails, check that both CSV files are in the `data/` folder.
-
----
-
-## Step 6 — Train All Models
-
-This is the main training step. It runs the full pipeline and logs everything to MLflow.
-
-```bash
-cd src
-python train.py
-cd ..
-```
-
-**What happens:**
-1. Features are engineered and saved to `data/X_features.parquet`
-2. Autoencoder trains on non-fraud transactions (~20 epochs)
-3. XGBoost trains with early stopping on PR-AUC
-4. Ensemble meta-learner is trained and evaluated
-5. All artifacts are saved to `models/`
-6. All runs are logged to `mlruns/`
-
-**Expected runtime:** 25 to 40 minutes on a standard laptop (CPU only).
+**Expected runtime:** 25 to 40 minutes on CPU.
 
 **Expected final output:**
 ```
---- Ensemble Comparison (PR-AUC) ---
-  xgboost_only_pr_auc              : 0.8412
-  autoencoder_only_pr_auc          : 0.6103
-  weighted_ensemble_pr_auc         : 0.8619
-  meta_learner_pr_auc              : 0.8721
-
-Best approach: meta_learner_pr_auc (0.8721)
-
-Training summary saved to models/training_summary.json
+TRAINING COMPLETE
+Final ensemble PR-AUC: ~0.52
+MLflow Run ID: xxxxxxxx
+Models saved to: models/
 ```
 
-**Verify models were saved:**
-
-```bash
-ls models/
-# Expected:
-# autoencoder.keras
-# ae_scaler.pkl
-# ae_threshold.pkl
-# ae_max_score.pkl
-# xgboost_model.pkl
-# meta_learner.pkl
-# training_summary.json
-```
+**Note on PR-AUC:** The IEEE-CIS dataset is one of the most challenging fraud datasets publicly available. A PR-AUC of 0.50 to 0.55 is consistent with published benchmarks on this dataset. The ROC-AUC of ~0.91 confirms the model has strong discriminative power.
 
 ---
 
-## Step 7 — View MLflow Experiment Results
+## Step 6 — View MLflow Experiment Results
 
 ```bash
 mlflow ui --backend-store-uri mlruns --port 5001
@@ -208,200 +151,97 @@ mlflow ui --backend-store-uri mlruns --port 5001
 
 Open http://localhost:5001 in your browser.
 
-You will see the `fraud_detection_ieee_cis` experiment with one run logged. Click the run to see:
+Click the `fraud_detection_ieee_cis` experiment to see all logged parameters, metrics, and model artifacts.
 
-- All hyperparameters logged
-- PR-AUC, ROC-AUC, FPR@80recall metrics
-- Comparison across all three model approaches
-- Saved model artifacts
-
-**Screenshot opportunity:** Take a screenshot of the MLflow experiment page showing your metrics. This is important for your LinkedIn post.
+Stop with `Ctrl + C` when done.
 
 ---
 
-## Step 8 — Run Unit Tests
+## Step 7 — Generate Monitoring Reports
 
 ```bash
-pytest tests/ -v --cov=src
+python src/monitor.py
 ```
 
 Expected output:
 ```
-tests/test_feature_engineering.py::TestVelocityFeatures::test_adds_log_amount PASSED
-tests/test_feature_engineering.py::TestVelocityFeatures::test_log_amount_nonneg PASSED
-tests/test_feature_engineering.py::TestVelocityFeatures::test_adds_tx_hour PASSED
-...
----------- coverage: src/feature_engineering.py: 87% ----------
-
-14 passed in 8.32s
-```
-
----
-
-## Step 9 — Generate Monitoring Reports
-
-```bash
-cd src
-python monitor.py
-cd ..
-```
-
-Expected output:
-```
-Training period:    472432 transactions
-Production period:  118108 transactions
-
-Generating data drift report...
-Generating model performance report...
-
---- Monitoring Summary ---
-Data Drift Detected:    False
-Drifted Features:       4 / 20
-Fraud Rate (train):     0.0348
-Fraud Rate (prod sim):  0.0371
-Fraud Rate Delta:       +0.0023
-
-Reports saved to reports/
 Drift within acceptable range. No retraining needed.
+Reports saved to reports/
 ```
 
-Open the HTML reports:
-
+Open the reports:
 ```bash
-# Mac
-open reports/data_drift_report.html
-open reports/model_performance_report.html
-
-# Windows
 start reports/data_drift_report.html
-
-# Linux
-xdg-open reports/data_drift_report.html
+start reports/model_performance_report.html
 ```
-
-**Screenshot opportunity:** Take a screenshot of both Evidently reports in your browser.
 
 ---
 
-## Step 10 — Launch the Full Stack with Docker
-
-Make sure Docker Desktop is running before this step.
+## Step 8 — Launch the FastAPI Inference Endpoint
 
 ```bash
-docker-compose up --build
+uvicorn api.main:app --reload --port 8000
 ```
 
-This builds both Docker images and starts three containers:
-- `fraud_api` — FastAPI on port 8000
-- `fraud_dashboard` — Streamlit on port 8501
-- `fraud_mlflow` — MLflow UI on port 5001
+Open http://localhost:8000/docs in your browser.
 
-First build takes 5 to 10 minutes. Subsequent starts are faster.
+Test the predict endpoint with this request body:
 
-Wait until you see:
+```json
+{
+  "TransactionAmt": 2500.0,
+  "ProductCD": "C",
+  "card1": 4932,
+  "card4": "visa",
+  "card6": "credit",
+  "P_emaildomain": "protonmail.com",
+  "DeviceType": "mobile"
+}
 ```
-fraud_api        | INFO:     Application startup complete.
-fraud_dashboard  | You can now view your Streamlit app in your browser.
+
+Expected response includes fraud probability, anomaly score, ensemble decision, risk level, and top 3 SHAP features.
+
+Stop with `Ctrl + C` when done.
+
+---
+
+## Step 9 — Launch the Streamlit Dashboard
+
+In a new terminal (with conda environment active):
+
+```bash
+streamlit run dashboard/app.py
 ```
 
-Open in your browser:
+Open http://localhost:8501 in your browser.
 
-| Service | URL | What to do |
+Click **Score 100 Transactions** to simulate a live transaction feed. Click any flagged transaction in the right panel to see the SHAP explanation detail.
+
+---
+
+## Running Order Summary
+
+| Step | Command | Runtime |
 |---|---|---|
-| Dashboard | http://localhost:8501 | Click "Score 100 Transactions" |
-| API Docs | http://localhost:8000/docs | Try the /predict endpoint |
-| MLflow | http://localhost:5001 | View experiment runs |
-
-**Screenshot opportunity:** Take screenshots of all three browser tabs. These are your primary proof screenshots.
-
----
-
-## Step 11 — Test the API Manually
-
-With the stack running, open a new terminal and run:
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "TransactionAmt": 2500.0,
-    "ProductCD": "C",
-    "card1": 4932,
-    "card4": "visa",
-    "card6": "credit",
-    "P_emaildomain": "protonmail.com",
-    "DeviceType": "mobile"
-  }'
-```
-
-You will receive a JSON response with fraud probability, risk level, and top SHAP features.
-
-You can also use the interactive Swagger UI at http://localhost:8000/docs to test without curl.
-
-**Screenshot opportunity:** Screenshot the Swagger UI response. This shows end-to-end inference working.
+| Install packages | `pip install -r requirements.txt ...` | 5-10 min |
+| Train pipeline | `python src/train.py` | 25-40 min |
+| MLflow UI | `mlflow ui --backend-store-uri mlruns --port 5001` | instant |
+| Monitoring reports | `python src/monitor.py` | 2-3 min |
+| FastAPI server | `uvicorn api.main:app --reload --port 8000` | instant |
+| Streamlit dashboard | `streamlit run dashboard/app.py` | instant |
 
 ---
 
-## Step 12 — Shut Down
-
-```bash
-# Stop the Docker stack
-docker-compose down
-
-# Deactivate the virtual environment
-deactivate
-```
-
----
-
-## Troubleshooting
-
-**Docker: "port already in use"**
-Change the host port in docker-compose.yml. For example change `"8000:8000"` to `"8001:8000"`.
-
-**MLflow: no experiment showing**
-Make sure you ran `python src/train.py` first. The `mlruns/` folder must exist before the MLflow container starts.
-
-**API: 503 "Models not loaded"**
-The API container could not find the model files. Make sure `models/` contains all artifacts from Step 6, and that the Docker volume mount in docker-compose.yml is pointing to the correct local path.
-
-**TensorFlow: slow training**
-This is expected on CPU. For faster training, use Google Colab (free GPU) and upload the dataset there. Training takes under 5 minutes on a T4 GPU.
-
-**Great Expectations import error**
-Try `pip install great-expectations==0.18.15` explicitly. Version 1.x has breaking changes from 0.18.x.
-
-**ImportError in train.py**
-Make sure you are running from inside the `src/` directory: `cd src && python train.py`
-
----
-
-## Screenshots to Capture (Summary)
-
-Capture these before submitting or sharing:
-
-1. Terminal output of `python train.py` showing final ensemble PR-AUC
-2. MLflow UI at http://localhost:5001 showing the experiment run with metrics
-3. Streamlit dashboard at http://localhost:8501 after clicking "Score 100 Transactions"
-4. Streamlit detail panel showing a flagged transaction with SHAP explanation
-5. FastAPI Swagger UI at http://localhost:8000/docs showing a /predict response
-6. Evidently data drift report (browser screenshot)
-7. Evidently model performance report (browser screenshot)
-8. GitHub Actions passing CI run (after pushing to GitHub)
-
----
-
-## File Locations Quick Reference
+## File Locations Reference
 
 | What | Where |
 |---|---|
-| Raw data | `data/train_transaction.csv`, `data/train_identity.csv` |
+| Raw data (auto-downloaded) | `data/train_transaction.csv`, `data/train_identity.csv` |
 | Processed features | `data/X_features.parquet`, `data/y_labels.parquet` |
 | Encoders | `data/encoders.pkl` |
-| Autoencoder model | `models/autoencoder.keras` |
+| Autoencoder model | `models/autoencoder.pt` |
 | XGBoost model | `models/xgboost_model.pkl` |
 | Meta-learner | `models/meta_learner.pkl` |
 | Training summary | `models/training_summary.json` |
 | MLflow runs | `mlruns/` |
 | Evidently reports | `reports/data_drift_report.html`, `reports/model_performance_report.html` |
-| CI workflow | `.github/workflows/ci.yml` |
