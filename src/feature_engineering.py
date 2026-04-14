@@ -136,11 +136,12 @@ def encode_categoricals(
 
 def fill_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Fill missing values in numeric columns with column median.
-    Categorical columns are handled in encode_categoricals.
+    Fill missing values and replace infinity in numeric columns.
     """
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
+        # Replace infinity with NaN first, then fill with median
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
         if df[col].isnull().any():
             df[col] = df[col].fillna(df[col].median())
     return df

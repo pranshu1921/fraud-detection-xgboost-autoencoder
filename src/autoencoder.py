@@ -2,6 +2,8 @@
 autoencoder.py
 Trains a deep autoencoder on non-fraud transactions only.
 At inference time, high reconstruction error = likely anomaly.
+
+Backend: PyTorch (replaces TensorFlow for Windows compatibility)
 """
 
 import numpy as np
@@ -10,35 +12,47 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import os
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
 
-def build_autoencoder(input_dim: int) -> keras.Model:
+class FraudAutoencoder(nn.Module):
     """
-    Build a symmetric autoencoder.
-    Encoder compresses to a 32-dim bottleneck.
+    Symmetric autoencoder.
+    Encoder compresses input to a 32-dim bottleneck.
     Decoder reconstructs back to original dimension.
     """
-    # Encoder
-    inputs = keras.Input(shape=(input_dim,), name="input")
-    x = layers.Dense(256, activation="relu", name="enc_1")(inputs)
-    x = layers.Dropout(0.2)(x)
-    x = layers.Dense(128, activation="relu", name="enc_2")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.Dense(64,  activation="relu", name="enc_3")(x)
-    bottleneck = layers.Dense(32, activation="relu", name="bottleneck")(x)
+    def __init__(self, input_dim: int):
+        super(FraudAutoencoder, self).__init__()
 
-    # Decoder
-    x = layers.Dense(64,  activation="relu", name="dec_3")(bottleneck)
-    x = layers.Dense(128, activation="relu", name="dec_2")(x)
-    x = layers.Dense(256, activation="relu", name="dec_1")(x)
-    outputs = layers.Dense(input_dim, activation="linear", name="output")(x)
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+        )
 
-    model = keras.Model(inputs=inputs, outputs=outputs, name="autoencoder")
-    model.compile(optimizer="adam", loss="mse")
-    return model
+        self.decoder = nn.Sequential(
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, input_dim),
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
 
 
 def train_autoencoder(
@@ -48,92 +62,129 @@ def train_autoencoder(
     batch_size: int = 512,
     validation_split: float = 0.1,
     model_dir: str = "models",
-) -> tuple[keras.Model, StandardScaler, float]:
+) -> tuple:
     """
     Train autoencoder on non-fraud transactions only.
-    Returns (model, scaler, anomaly_threshold).
-
-    The threshold is set at the 95th percentile of reconstruction
-    error on the training (non-fraud) data. Transactions above
-    this threshold are flagged as anomalous.
+    Returns (model, scaler, threshold).
     """
     os.makedirs(model_dir, exist_ok=True)
 
-    # Train only on legitimate transactions
+    device = torch.device("cpu")
+
     X_legit = X[y == 0].copy()
     print(f"Training autoencoder on {len(X_legit)} legitimate transactions...")
 
-    # Scale features
     scaler = StandardScaler()
-    X_legit_scaled = scaler.fit_transform(X_legit)
+    X_scaled = scaler.fit_transform(X_legit).astype(np.float32)
 
-    # Build and train
-    model = build_autoencoder(input_dim=X_legit_scaled.shape[1])
-    model.summary()
+    val_size = int(len(X_scaled) * validation_split)
+    X_train_ae = X_scaled[:-val_size]
+    X_val_ae   = X_scaled[-val_size:]
 
-    early_stop = keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=3, restore_best_weights=True
-    )
-    reduce_lr = keras.callbacks.ReduceLROnPlateau(
-        monitor="val_loss", factor=0.5, patience=2, verbose=1
-    )
+    train_dataset = TensorDataset(torch.tensor(X_train_ae))
+    val_dataset   = TensorDataset(torch.tensor(X_val_ae))
+    train_loader  = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader    = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
 
-    history = model.fit(
-        X_legit_scaled, X_legit_scaled,
-        epochs=epochs,
-        batch_size=batch_size,
-        validation_split=validation_split,
-        callbacks=[early_stop, reduce_lr],
-        verbose=1,
-    )
+    input_dim = X_scaled.shape[1]
+    model = FraudAutoencoder(input_dim).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.MSELoss()
 
-    # Compute reconstruction error on training data
-    X_legit_reconstructed = model.predict(X_legit_scaled, batch_size=batch_size)
-    reconstruction_errors = np.mean(
-        np.power(X_legit_scaled - X_legit_reconstructed, 2), axis=1
-    )
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Set threshold at 95th percentile of legitimate transaction errors
-    threshold = float(np.percentile(reconstruction_errors, 95))
+    best_val_loss = float("inf")
+    patience_counter = 0
+    patience = 3
+
+    for epoch in range(epochs):
+        model.train()
+        train_loss = 0.0
+        for (batch,) in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            output = model(batch)
+            loss = criterion(output, batch)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * len(batch)
+        train_loss /= len(train_dataset)
+
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for (batch,) in val_loader:
+                batch = batch.to(device)
+                output = model(batch)
+                loss = criterion(output, batch)
+                val_loss += loss.item() * len(batch)
+        val_loss /= len(val_dataset)
+
+        print(f"Epoch {epoch+1:2d}/{epochs} | train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), f"{model_dir}/autoencoder_best.pt")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch+1}")
+                break
+
+    model.load_state_dict(torch.load(f"{model_dir}/autoencoder_best.pt", weights_only=True))
+    model.eval()
+
+    with torch.no_grad():
+        X_tensor = torch.tensor(X_scaled).to(device)
+        X_reconstructed = model(X_tensor).cpu().numpy()
+
+    errors = np.mean(np.power(X_scaled - X_reconstructed, 2), axis=1)
+    threshold = float(np.percentile(errors, 95))
+
     print(f"\nAnomaly threshold (95th percentile): {threshold:.6f}")
-    print(f"Mean reconstruction error (legit):   {reconstruction_errors.mean():.6f}")
+    print(f"Mean reconstruction error (legit):   {errors.mean():.6f}")
 
-    # Save artifacts
-    model.save(f"{model_dir}/autoencoder.keras")
+    torch.save(model.state_dict(), f"{model_dir}/autoencoder.pt")
+    joblib.dump({"input_dim": input_dim}, f"{model_dir}/autoencoder_config.pkl")
     joblib.dump(scaler, f"{model_dir}/ae_scaler.pkl")
     joblib.dump({"threshold": threshold}, f"{model_dir}/ae_threshold.pkl")
 
-    print(f"\nSaved autoencoder artifacts to {model_dir}/")
+    print(f"Saved autoencoder artifacts to {model_dir}/")
     return model, scaler, threshold
 
 
 def score_transactions(
     X: pd.DataFrame,
-    model: keras.Model,
+    model,
     scaler: StandardScaler,
     threshold: float,
     batch_size: int = 512,
 ) -> pd.DataFrame:
     """
     Score all transactions with the autoencoder.
-    Returns a DataFrame with columns:
-      - ae_reconstruction_error: raw error score
-      - ae_anomaly_score: normalized score (0 to 1)
-      - ae_is_anomaly: binary flag based on threshold
+    Returns DataFrame with reconstruction error, anomaly score, and binary flag.
     """
-    X_scaled = scaler.transform(X)
-    X_reconstructed = model.predict(X_scaled, batch_size=batch_size, verbose=0)
+    device = torch.device("cpu")
+    model.eval()
 
-    errors = np.mean(np.power(X_scaled - X_reconstructed, 2), axis=1)
+    X_scaled = scaler.transform(X).astype(np.float32)
 
-    # Normalize to 0-1 range using the threshold as the reference point
-    # Scores above 1.0 are strongly anomalous
-    normalized = errors / (threshold + 1e-10)
+    all_errors = []
+    for i in range(0, len(X_scaled), batch_size):
+        batch = torch.tensor(X_scaled[i:i+batch_size]).to(device)
+        with torch.no_grad():
+            reconstructed = model(batch).cpu().numpy()
+        errors = np.mean(np.power(X_scaled[i:i+batch_size] - reconstructed, 2), axis=1)
+        all_errors.extend(errors.tolist())
+
+    errors = np.array(all_errors)
+    normalized = np.clip(errors / (threshold + 1e-10), 0, 5)
 
     scores = pd.DataFrame({
         "ae_reconstruction_error": errors,
-        "ae_anomaly_score": np.clip(normalized, 0, 5),  # cap at 5x threshold
-        "ae_is_anomaly": (errors > threshold).astype(int),
+        "ae_anomaly_score":        normalized,
+        "ae_is_anomaly":           (errors > threshold).astype(int),
     })
 
     anomaly_rate = scores["ae_is_anomaly"].mean()
@@ -144,8 +195,12 @@ def score_transactions(
 
 def load_autoencoder_artifacts(model_dir: str = "models"):
     """Load saved autoencoder model, scaler, and threshold."""
-    model = keras.models.load_model(f"{model_dir}/autoencoder.keras")
-    scaler = joblib.load(f"{model_dir}/ae_scaler.pkl")
-    threshold_data = joblib.load(f"{model_dir}/ae_threshold.pkl")
-    threshold = threshold_data["threshold"]
+    config    = joblib.load(f"{model_dir}/autoencoder_config.pkl")
+    scaler    = joblib.load(f"{model_dir}/ae_scaler.pkl")
+    threshold = joblib.load(f"{model_dir}/ae_threshold.pkl")["threshold"]
+
+    model = FraudAutoencoder(input_dim=config["input_dim"])
+    model.load_state_dict(torch.load(f"{model_dir}/autoencoder.pt", map_location="cpu", weights_only=True))
+    model.eval()
+
     return model, scaler, threshold
